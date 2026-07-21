@@ -17,6 +17,13 @@ export async function ensureTablesExist() {
         );
       `,
       sql`
+        CREATE TABLE IF NOT EXISTS user_app_states (
+          user_id TEXT PRIMARY KEY,
+          state_data TEXT NOT NULL,
+          updated_at TIMESTAMP DEFAULT NOW()
+        );
+      `,
+      sql`
         CREATE TABLE IF NOT EXISTS media_items (
           id SERIAL PRIMARY KEY,
           user_id TEXT NOT NULL,
@@ -27,7 +34,7 @@ export async function ensureTablesExist() {
           backdrop_path TEXT,
           overview TEXT,
           release_date TEXT,
-          genres JSONB,
+          genres TEXT,
           rating TEXT,
           runtime INTEGER,
           seasons_count INTEGER,
@@ -38,10 +45,10 @@ export async function ensureTablesExist() {
           completed BOOLEAN DEFAULT FALSE,
           stopped_watching BOOLEAN DEFAULT FALSE,
           last_watched_at TIMESTAMP,
-          seasons JSONB,
+          seasons TEXT,
           imdb_id TEXT,
-          "cast" JSONB,
-          directors JSONB
+          cast_data TEXT,
+          directors TEXT
         );
       `,
       sql`
@@ -64,10 +71,28 @@ export async function ensureTablesExist() {
 export async function fetchNeonState(userId: string) {
   await ensureTablesExist();
   
+  // 1. Always register user profile ID in Neon
   try {
     await sql`INSERT INTO user_profiles (id) VALUES (${userId}) ON CONFLICT DO NOTHING;`;
   } catch (e) {}
 
+  // 2. Fetch primary state from user_app_states key-value table
+  try {
+    const rows = await sql`SELECT state_data FROM user_app_states WHERE user_id = ${userId};`;
+    if (rows && rows.length > 0 && rows[0].state_data) {
+      const parsed = typeof rows[0].state_data === 'string' ? JSON.parse(rows[0].state_data) : rows[0].state_data;
+      return {
+        shows: parsed.shows || [],
+        movies: parsed.movies || [],
+        watchedEpisodes: parsed.watchedEpisodes || {},
+        favorites: parsed.favorites || []
+      };
+    }
+  } catch (e) {
+    console.warn('[NeonClient] Primary user_app_states fetch failed, checking legacy tables:', e);
+  }
+
+  // 3. Fallback to legacy relational tables
   const [items, watchedRows] = await Promise.all([
     sql`SELECT * FROM media_items WHERE user_id = ${userId}`,
     sql`SELECT * FROM watched_episodes WHERE user_id = ${userId}`
@@ -154,12 +179,11 @@ export async function saveNeonState(userId: string, data: {
     await sql`INSERT INTO user_profiles (id) VALUES (${userId}) ON CONFLICT DO NOTHING;`;
   } catch (e) {}
 
-  const allItems = [
-    ...(data.shows || []).map(s => ({ ...s, type: 'show' })),
-    ...(data.movies || []).map(m => ({ ...m, type: 'movie' })),
-  ];
-
+  const shows = data.shows || [];
+  const movies = data.movies || [];
   const watched = data.watchedEpisodes || {};
+  const favorites = data.favorites || [];
+
   let totalWatchedCount = 0;
   Object.keys(watched).forEach(id => {
     if (watched[Number(id)]) {
@@ -167,12 +191,14 @@ export async function saveNeonState(userId: string, data: {
     }
   });
 
-  if (allItems.length === 0 && totalWatchedCount === 0) {
+  // Strict wipe protection
+  if (shows.length === 0 && movies.length === 0 && totalWatchedCount === 0) {
     if (!isExplicitReset) {
       console.warn('[NeonClient] Blocked clearing database for empty state payload.');
       return;
     } else {
       await Promise.all([
+        sql`DELETE FROM user_app_states WHERE user_id = ${userId}`,
         sql`DELETE FROM media_items WHERE user_id = ${userId}`,
         sql`DELETE FROM watched_episodes WHERE user_id = ${userId}`
       ]);
@@ -180,49 +206,76 @@ export async function saveNeonState(userId: string, data: {
     }
   }
 
-  // Clear existing items for this user before insert
-  await Promise.all([
-    sql`DELETE FROM media_items WHERE user_id = ${userId}`,
-    sql`DELETE FROM watched_episodes WHERE user_id = ${userId}`
-  ]);
-
-  // Insert all media items concurrently using correct column names
-  const itemInserts = allItems.map(item => {
-    const isFav = (data.favorites || []).includes(item.id) || item.isFavorite || false;
-
-    return sql`
-      INSERT INTO media_items (
-        user_id, media_id, type, title, poster_path, backdrop_path,
-        overview, release_date, genres, rating, runtime,
-        seasons_count, episodes_count, in_watchlist, is_favorite,
-        user_rating, completed, stopped_watching, last_watched_at,
-        seasons, imdb_id, "cast", directors
-      ) VALUES (
-        ${userId}, ${item.id}, ${item.type}, ${item.title || 'Untitled'}, ${item.posterPath || null}, ${item.backdropPath || null},
-        ${item.overview || null}, ${item.releaseDate || null}, ${item.genres || []}, ${item.rating?.toString() || null}, ${item.runtime || null},
-        ${item.seasonsCount || null}, ${item.episodesCount || null}, ${item.inWatchlist || false}, ${isFav},
-        ${item.userRating || null}, ${item.completed || false}, ${item.stoppedWatching || false}, ${item.lastWatchedAt ? new Date(item.lastWatchedAt).toISOString() : null},
-        ${item.seasons || null}, ${item.imdbId || null}, ${item.cast || null}, ${item.directors || null}
-      )
-    `;
+  const payloadJson = JSON.stringify({
+    shows,
+    movies,
+    watchedEpisodes: watched,
+    favorites
   });
 
-  const watchedInserts: any[] = [];
-  for (const showIdStr of Object.keys(watched)) {
-    const showId = Number(showIdStr);
-    if (isNaN(showId) || showId <= 0) continue;
-    const eps = watched[showId];
-    if (eps && typeof eps === 'object') {
-      for (const epKey of Object.keys(eps)) {
-        if (eps[epKey]) {
-          watchedInserts.push(sql`
-            INSERT INTO watched_episodes (user_id, show_id, episode_key)
-            VALUES (${userId}, ${showId}, ${epKey})
-          `);
+  // 1. Save to primary user_app_states key-value table (atomic UPSERT)
+  await sql`
+    INSERT INTO user_app_states (user_id, state_data, updated_at)
+    VALUES (${userId}, ${payloadJson}, NOW())
+    ON CONFLICT (user_id)
+    DO UPDATE SET state_data = EXCLUDED.state_data, updated_at = NOW();
+  `;
+
+  // 2. Also sync to relational tables for PostgreSQL browser table compatibility
+  try {
+    await Promise.all([
+      sql`DELETE FROM media_items WHERE user_id = ${userId}`,
+      sql`DELETE FROM watched_episodes WHERE user_id = ${userId}`
+    ]);
+
+    const allItems = [
+      ...shows.map(s => ({ ...s, type: 'show' })),
+      ...movies.map(m => ({ ...m, type: 'movie' })),
+    ];
+
+    const itemInserts = allItems.map(item => {
+      const isFav = favorites.includes(item.id) || item.isFavorite || false;
+      const genresStr = JSON.stringify(item.genres || []);
+      const seasonsStr = item.seasons ? JSON.stringify(item.seasons) : null;
+      const castStr = item.cast ? JSON.stringify(item.cast) : null;
+      const directorsStr = item.directors ? JSON.stringify(item.directors) : null;
+
+      return sql`
+        INSERT INTO media_items (
+          user_id, media_id, type, title, poster_path, backdrop_path,
+          overview, release_date, genres, rating, runtime,
+          seasons_count, episodes_count, in_watchlist, is_favorite,
+          user_rating, completed, stopped_watching, last_watched_at,
+          seasons, imdb_id, cast_data, directors
+        ) VALUES (
+          ${userId}, ${item.id}, ${item.type}, ${item.title || 'Untitled'}, ${item.posterPath || null}, ${item.backdropPath || null},
+          ${item.overview || null}, ${item.releaseDate || null}, ${genresStr}, ${item.rating?.toString() || null}, ${item.runtime || null},
+          ${item.seasonsCount || null}, ${item.episodesCount || null}, ${item.inWatchlist || false}, ${isFav},
+          ${item.userRating || null}, ${item.completed || false}, ${item.stoppedWatching || false}, ${item.lastWatchedAt ? new Date(item.lastWatchedAt).toISOString() : null},
+          ${seasonsStr}, ${item.imdbId || null}, ${castStr}, ${directorsStr}
+        )
+      `;
+    });
+
+    const watchedInserts: any[] = [];
+    for (const showIdStr of Object.keys(watched)) {
+      const showId = Number(showIdStr);
+      if (isNaN(showId) || showId <= 0) continue;
+      const eps = watched[showId];
+      if (eps && typeof eps === 'object') {
+        for (const epKey of Object.keys(eps)) {
+          if (eps[epKey]) {
+            watchedInserts.push(sql`
+              INSERT INTO watched_episodes (user_id, show_id, episode_key)
+              VALUES (${userId}, ${showId}, ${epKey})
+            `);
+          }
         }
       }
     }
-  }
 
-  await Promise.all([...itemInserts, ...watchedInserts]);
+    await Promise.all([...itemInserts, ...watchedInserts]);
+  } catch (e) {
+    console.warn('[NeonClient] Relational table background sync note:', e);
+  }
 }
