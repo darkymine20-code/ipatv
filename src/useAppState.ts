@@ -313,13 +313,24 @@ export function useAppState(isSiteLocked = false) {
   useEffect(() => {
     if (!isLoaded || loadFailedRef.current) return;
 
-    const handleBeforeUnload = () => {
+    const handleAppClose = () => {
       saveState(stateRef.current, true);
     };
 
-    window.addEventListener('beforeunload', handleBeforeUnload);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        saveState(stateRef.current, true);
+      }
+    };
+
+    window.addEventListener('beforeunload', handleAppClose);
+    window.addEventListener('pagehide', handleAppClose);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('beforeunload', handleAppClose);
+      window.removeEventListener('pagehide', handleAppClose);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       saveState(stateRef.current, true); // Flush on unmount
     };
   }, [isLoaded, saveState]);
@@ -341,17 +352,18 @@ export function useAppState(isSiteLocked = false) {
     try {
       const pruned = pruneInactiveState(state);
       const dataStr = JSON.stringify(pruned, null, 2);
-      const blob = new Blob([dataStr], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
       const filename = `tv_movie_tracker_backup_${new Date().toISOString().slice(0, 10)}.json`;
       
+      const blob = new Blob([dataStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
       const linkElement = document.createElement('a');
       linkElement.href = url;
       linkElement.download = filename;
+      linkElement.target = '_blank';
       document.body.appendChild(linkElement);
       linkElement.click();
       document.body.removeChild(linkElement);
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) {
       console.warn('Failed to export state:', e);
     }

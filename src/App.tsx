@@ -105,9 +105,19 @@ export default function App() {
   const [importSuccess, setImportSuccess] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
 
+  const [exportJsonData, setExportJsonData] = useState<string | null>(null);
+  const [copySuccess, setCopySuccess] = useState<boolean>(false);
+
   const handleExportFile = () => {
     try {
       state.exportState();
+      const dataStr = JSON.stringify({
+        shows: state.shows,
+        movies: state.movies,
+        watchedEpisodes: state.watchedEpisodes,
+        favorites: state.favorites
+      }, null, 2);
+      setExportJsonData(dataStr);
     } catch (err: any) {
       console.error('Failed to export state:', err);
     }
@@ -3675,12 +3685,59 @@ export default function App() {
 
                 // Show details modal for this item
                 setSelectedMediaItem(localItem || item);
-                // Close the person filmography profile modal
                 setSelectedPersonId(null);
               }}
             />
           )}
         </AnimatePresence>
+
+        {/* EXPORT BACKUP MODAL */}
+        {exportJsonData && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-6 text-white space-y-4 shadow-2xl">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-bold flex items-center gap-2">
+                  <Download className="w-5 h-5 text-indigo-400" />
+                  Backup JSON Export
+                </h3>
+                <button
+                  onClick={() => { setExportJsonData(null); setCopySuccess(false); }}
+                  className="text-slate-400 hover:text-white text-xl font-bold px-2"
+                >
+                  ✕
+                </button>
+              </div>
+              <p className="text-sm text-slate-300">
+                Your backup JSON has been generated. If the file did not download automatically on your device, click <strong>Copy JSON Data</strong> to copy your backup to your clipboard:
+              </p>
+              <textarea
+                readOnly
+                value={exportJsonData}
+                rows={7}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-mono text-slate-300 resize-none focus:outline-none"
+              />
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(exportJsonData);
+                    setCopySuccess(true);
+                    setTimeout(() => setCopySuccess(false), 3000);
+                  }}
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white py-2.5 px-4 rounded-xl text-sm font-semibold transition flex items-center justify-center gap-2"
+                >
+                  {copySuccess ? <Check className="w-4 h-4" /> : <Upload className="w-4 h-4" />}
+                  {copySuccess ? 'Copied to Clipboard!' : 'Copy JSON Data'}
+                </button>
+                <button
+                  onClick={() => { setExportJsonData(null); setCopySuccess(false); }}
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 py-2.5 px-4 rounded-xl text-sm font-semibold transition"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>
