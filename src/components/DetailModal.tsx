@@ -4504,10 +4504,36 @@ export function DetailModal({
                             </div>
                           ))
                         ) : (
-                          <div className="py-8 text-center text-zinc-500 text-sm">No comments found.</div>
+                          <div className="py-8 flex flex-col items-center justify-center gap-3 text-center bg-zinc-900/10 border border-white/5 rounded-2xl p-6">
+                            <MessageSquare className="w-8 h-8 text-zinc-700 mb-1" />
+                            <p className="text-sm font-semibold text-zinc-400">No Kurdcinema comments found for this title</p>
+                            <button
+                              onClick={() => {
+                                setKurdcinemaSelectedUrl(null);
+                                setKurdcinemaComments(null);
+                              }}
+                              className="px-4 py-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-xs font-bold rounded-xl transition-all cursor-pointer mt-2"
+                            >
+                              Search Kurdcinema Manually
+                            </button>
+                          </div>
                         )}
                       </div>
-                    ) : null}
+                    ) : (
+                      <div className="py-8 flex flex-col items-center justify-center gap-3 text-center bg-zinc-900/10 border border-white/5 rounded-2xl p-6">
+                        <MessageSquare className="w-8 h-8 text-zinc-700 mb-1" />
+                        <p className="text-sm font-semibold text-zinc-400">Unable to load Kurdcinema comments automatically</p>
+                        <button
+                          onClick={() => {
+                            setKurdcinemaSelectedUrl(null);
+                            setKurdcinemaComments(null);
+                          }}
+                          className="px-4 py-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-xs font-bold rounded-xl transition-all cursor-pointer mt-2"
+                        >
+                          Search Kurdcinema Manually
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

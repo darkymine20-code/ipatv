@@ -1,9 +1,35 @@
 import * as cheerio from 'cheerio';
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 
 const BASE_URL = "https://kurdcinama.com";
 
+const DEFAULT_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+};
+
 async function fetchWithProxy(targetUrl: string, isJson = false): Promise<any> {
-  // 1. Try direct fetch first
+  // 1. Native iOS Capacitor HTTP Request (Runs on iOS device directly without browser CORS)
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const response = await CapacitorHttp.get({
+        url: targetUrl,
+        headers: DEFAULT_HEADERS
+      });
+      if (response.status >= 200 && response.status < 300) {
+        let data = response.data;
+        if (isJson && typeof data === 'string') {
+          try { data = JSON.parse(data); } catch (e) {}
+        }
+        return data;
+      }
+    } catch (err) {
+      console.warn('[CapacitorHttp] Native fetch failed:', err);
+    }
+  }
+
+  // 2. Direct fetch fallback
   try {
     const res = await fetch(targetUrl);
     if (res.ok) {
@@ -11,7 +37,7 @@ async function fetchWithProxy(targetUrl: string, isJson = false): Promise<any> {
     }
   } catch (err) {}
 
-  // 2. AllOrigins Raw Proxy
+  // 3. AllOrigins Raw Proxy
   try {
     const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
     const proxyRes = await fetch(proxyUrl);
@@ -21,7 +47,7 @@ async function fetchWithProxy(targetUrl: string, isJson = false): Promise<any> {
     }
   } catch (err) {}
 
-  // 3. CorsProxy.io Proxy
+  // 4. CorsProxy.io Proxy
   try {
     const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
     const proxyRes = await fetch(proxyUrl);
@@ -31,7 +57,7 @@ async function fetchWithProxy(targetUrl: string, isJson = false): Promise<any> {
     }
   } catch (err) {}
 
-  // 4. CodeTabs Proxy
+  // 5. CodeTabs Proxy
   try {
     const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`;
     const proxyRes = await fetch(proxyUrl);
@@ -49,18 +75,29 @@ export async function searchKurdcinema(query: string, filter: string = 'all') {
   const searchUrl = `${BASE_URL}/Search.aspx?ajax=1&term=${encodeURIComponent(query.trim())}&filter=${encodeURIComponent(filter)}`;
   try {
     const data = await fetchWithProxy(searchUrl, true);
-    return Array.isArray(data) ? data : [];
-  } catch (e) {
-    // Retry with 'all' filter if specific filter failed
-    if (filter !== 'all') {
+    if (Array.isArray(data)) return data;
+    if (typeof data === 'string') {
       try {
-        const fallbackUrl = `${BASE_URL}/Search.aspx?ajax=1&term=${encodeURIComponent(query.trim())}&filter=all`;
-        const fallbackData = await fetchWithProxy(fallbackUrl, true);
-        return Array.isArray(fallbackData) ? fallbackData : [];
-      } catch (err) {}
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (e) {}
     }
-    return [];
+  } catch (e) {}
+
+  if (filter !== 'all') {
+    try {
+      const fallbackUrl = `${BASE_URL}/Search.aspx?ajax=1&term=${encodeURIComponent(query.trim())}&filter=all`;
+      const fallbackData = await fetchWithProxy(fallbackUrl, true);
+      if (Array.isArray(fallbackData)) return fallbackData;
+      if (typeof fallbackData === 'string') {
+        try {
+          const parsed = JSON.parse(fallbackData);
+          if (Array.isArray(parsed)) return parsed;
+        } catch (e) {}
+      }
+    } catch (err) {}
   }
+  return [];
 }
 
 export async function scrapeComments(urlOrId: string, contentType: string = 'movie', includeReplies: boolean = true) {
@@ -92,7 +129,13 @@ export async function scrapeComments(urlOrId: string, contentType: string = 'mov
     }
   }
 
-  const html = await fetchWithProxy(targetUrl, false);
+  let html: string = '';
+  try {
+    html = await fetchWithProxy(targetUrl, false);
+  } catch (e) {
+    return null;
+  }
+
   if (!html || typeof html !== 'string') {
     return null;
   }
@@ -104,7 +147,7 @@ export async function scrapeComments(urlOrId: string, contentType: string = 'mov
   const totalReviewsLabel = $('.reviews-count, .comments-count').text().trim() || '0 comments';
 
   const comments: any[] = [];
-  const reviewCards = $('.reviews-list .review-card, .review-card, .comment-card, .comment-item').toArray();
+  const reviewCards = $('.reviews-list .review-card, .review-card, .comment-card, .comment-item, .card').toArray();
 
   for (let i = 0; i < reviewCards.length; i++) {
     const card = $(reviewCards[i]);
@@ -117,7 +160,7 @@ export async function scrapeComments(urlOrId: string, contentType: string = 'mov
       reviewId = `temp_${i + 1}`;
     }
 
-    const userNameLink = card.find('.review-user-name-link, .user-name, .comment-author');
+    const userNameLink = card.find('.review-user-name-link, .user-name, .comment-author, a');
     const userName = userNameLink.text().trim() || 'Kurdcinema User';
     const userProfileHref = userNameLink.attr('href');
     const userProfile = userProfileHref ? `${BASE_URL}/${userProfileHref}` : '';
