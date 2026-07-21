@@ -1019,10 +1019,23 @@ export function DetailModal({
       setFlussonicScanProgress(`Checking: ${candidate.label}...`);
       
       try {
-        const testUrl = `/api/proxy-video?url=${encodeURIComponent(candidate.url)}`;
-        const response = await fetch(testUrl, { method: 'HEAD' });
+        let isSuccess = false;
+        try {
+          const testUrl = `/api/proxy-video?url=${encodeURIComponent(candidate.url)}`;
+          const response = await fetch(testUrl, { method: 'HEAD' });
+          if (response.ok) isSuccess = true;
+        } catch (err) {}
+
+        if (!isSuccess) {
+          try {
+            const directRes = await fetch(candidate.url, { method: 'HEAD', mode: 'no-cors' });
+            if (directRes.type === 'opaque' || directRes.ok) {
+              isSuccess = true;
+            }
+          } catch (err) {}
+        }
         
-        if (response.ok) {
+        if (isSuccess) {
           setFlussonicCheckedUrls(prev => 
             prev.map((c, idx) => idx === i ? { ...c, status: 'ok' as const } : c)
           );

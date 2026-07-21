@@ -4,6 +4,7 @@
  */
 
 import { MediaItem, Season, Episode, MediaType, TMDBReview } from './types';
+import { searchKurdcinema, scrapeComments } from './lib/kurdcinemaService';
 
 const DEFAULT_TMDB_API_KEY = '92cb9e28d9c7c9028682a433e85ea5d9';
 const DEFAULT_TMDB_ACCESS_TOKEN = 'eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI5MmNiOWUyOGQ5YzdjOTAyODY4MmE0MzNlODVlYTVkOSIsIm5iZiI6MTc4Mjk3Njk2My40NDMsInN1YiI6IjZhNDYxMWMzYjk3OTA4ZTA3ZWRmNjJjYSIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.bjOVp4j5DZb2ajmtjOnoajOscDjIs0aAMwXxKKDql8c';
@@ -718,10 +719,14 @@ export async function fetchMediaRecommendations(
 export async function fetchKurdcinemaSearch(query: string, type: 'movie' | 'series' | 'all' = 'all'): Promise<any[]> {
   try {
     const response = await fetch(`/api/kurdcinema/search?q=${encodeURIComponent(query)}&type=${type}`);
-    if (!response.ok) return [];
-    return await response.json();
+    if (response.ok) return await response.json();
+  } catch (err) {}
+
+  try {
+    const results = await searchKurdcinema(query, type);
+    return results || [];
   } catch (err) {
-    console.error('Failed to fetch kurdcinema search', err);
+    console.error('Failed client-side kurdcinema search', err);
     return [];
   }
 }
@@ -729,12 +734,72 @@ export async function fetchKurdcinemaSearch(query: string, type: 'movie' | 'seri
 export async function fetchKurdcinemaComments(url: string, type: 'movie' | 'series' = 'movie'): Promise<any> {
   try {
     const response = await fetch(`/api/kurdcinema/comments?url=${encodeURIComponent(url)}&type=${type}`);
-    if (!response.ok) return null;
-    return await response.json();
+    if (response.ok) return await response.json();
+  } catch (err) {}
+
+  try {
+    const data = await scrapeComments(url, type);
+    return data;
   } catch (err) {
-    console.error('Failed to fetch kurdcinema comments', err);
+    console.error('Failed client-side kurdcinema comments', err);
     return null;
   }
+}
+
+export async function fetchImdbRating(imdbId: string): Promise<{ rating: number | null; votes: number }> {
+  try {
+    const res = await fetch(`/api/imdb-rating?imdbId=${encodeURIComponent(imdbId)}`);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {}
+
+  try {
+    const data = await tmdbFetch(`/find/${imdbId}`, { external_source: 'imdb_id' });
+    const item = data.movie_results?.[0] || data.tv_results?.[0];
+    if (item) {
+      return {
+        rating: item.vote_average ? Math.round(item.vote_average * 10) / 10 : null,
+        votes: item.vote_count || 0,
+      };
+    }
+  } catch (e) {}
+
+  return { rating: null, votes: 0 };
+}
+
+export async function fetchImdbReviews(imdbId: string): Promise<any[]> {
+  try {
+    const res = await fetch(`/api/imdb-reviews?imdbId=${encodeURIComponent(imdbId)}`);
+    if (res.ok) {
+      const data = await res.json();
+      return data.reviews || [];
+    }
+  } catch (err) {}
+
+  try {
+    const data = await tmdbFetch(`/find/${imdbId}`, { external_source: 'imdb_id' });
+    const item = data.movie_results?.[0] || data.tv_results?.[0];
+    if (item) {
+      const tmdbType = data.movie_results?.[0] ? 'movie' : 'tv';
+      const reviewsData = await tmdbFetch(`/${tmdbType}/${item.id}/reviews`);
+      if (reviewsData && reviewsData.results) {
+        return reviewsData.results.map((r: any) => ({
+          id: r.id,
+          author: r.author,
+          authorDetails: {
+            username: r.author_details?.username,
+            rating: r.author_details?.rating,
+            avatarPath: r.author_details?.avatar_path,
+          },
+          content: r.content,
+          createdAt: r.created_at,
+        }));
+      }
+    }
+  } catch (e) {}
+
+  return [];
 }
 
 /**

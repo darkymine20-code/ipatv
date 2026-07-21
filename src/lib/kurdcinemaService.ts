@@ -1,19 +1,37 @@
 import * as cheerio from 'cheerio';
 
 const BASE_URL = "https://kurdcinama.com";
-const DEFAULT_HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-  "Accept-Language": "en-US,en;q=0.5",
-};
+
+async function fetchWithProxy(targetUrl: string, isJson = false): Promise<any> {
+  try {
+    const res = await fetch(targetUrl);
+    if (res.ok) {
+      return isJson ? await res.json() : await res.text();
+    }
+  } catch (err) {}
+
+  try {
+    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+    const proxyRes = await fetch(proxyUrl);
+    if (proxyRes.ok) {
+      return isJson ? await proxyRes.json() : await proxyRes.text();
+    }
+  } catch (err) {}
+
+  try {
+    const fallbackProxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+    const fallbackRes = await fetch(fallbackProxyUrl);
+    if (fallbackRes.ok) {
+      return isJson ? await fallbackRes.json() : await fallbackRes.text();
+    }
+  } catch (err) {}
+
+  throw new Error(`Failed to fetch ${targetUrl}`);
+}
 
 export async function searchKurdcinema(query: string, filter: string = 'all') {
   const searchUrl = `${BASE_URL}/Search.aspx?ajax=1&term=${encodeURIComponent(query)}&filter=${encodeURIComponent(filter)}`;
-  const response = await fetch(searchUrl, { headers: DEFAULT_HEADERS });
-  if (!response.ok) {
-    throw new Error(`Failed to search Kurdcinema: ${response.statusText}`);
-  }
-  const data = await response.json();
+  const data = await fetchWithProxy(searchUrl, true);
   return data;
 }
 
@@ -46,15 +64,7 @@ export async function scrapeComments(urlOrId: string, contentType: string = 'mov
     }
   }
 
-  const response = await fetch(targetUrl, { headers: DEFAULT_HEADERS });
-  if (response.status === 404) {
-    throw new Error("Page returned a 404. Invalid ID or URL.");
-  }
-  if (!response.ok) {
-    throw new Error(`Failed to fetch from Kurdcinema: ${response.statusText}`);
-  }
-
-  const html = await response.text();
+  const html = await fetchWithProxy(targetUrl, false);
   const $ = cheerio.load(html);
 
   const title = $('title').text().replace('| کوردسینەما', '').replace('| فیلمی ژێرنوسکراوی کوردی', '').trim() || 'Unknown Title';
@@ -120,19 +130,16 @@ export async function scrapeComments(urlOrId: string, contentType: string = 'mov
         }
 
         if (repliesApiUrl) {
-          const repliesRes = await fetch(repliesApiUrl, { headers: DEFAULT_HEADERS });
-          if (repliesRes.ok) {
-            const repliesData = await repliesRes.json();
-            if (repliesData.replies) {
-              replies = repliesData.replies.map((reply: any) => ({
-                user_name: (reply.userName || '').trim(),
-                user_code: (reply.userCode || '').trim(),
-                user_photo: reply.userPhoto ? `${BASE_URL}/User_Photos/${reply.userPhoto}` : '',
-                date: (reply.date || '').trim(),
-                text: (reply.text || '').trim(),
-                is_spoiler: !!reply.isSpoiler
-              }));
-            }
+          const repliesData = await fetchWithProxy(repliesApiUrl, true);
+          if (repliesData && repliesData.replies) {
+            replies = repliesData.replies.map((reply: any) => ({
+              user_name: (reply.userName || '').trim(),
+              user_code: (reply.userCode || '').trim(),
+              user_photo: reply.userPhoto ? `${BASE_URL}/User_Photos/${reply.userPhoto}` : '',
+              date: (reply.date || '').trim(),
+              text: (reply.text || '').trim(),
+              is_spoiler: !!reply.isSpoiler
+            }));
           }
         }
       } catch (e) {
