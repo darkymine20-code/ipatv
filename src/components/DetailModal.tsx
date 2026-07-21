@@ -12,7 +12,7 @@ import { getPredefinedSeasons, getPredefinedEpisodeRating, getUpcomingEpisodesTi
 import { AnimatePresence, motion } from 'motion/react';
 import HlsVideoPlayer from './HlsVideoPlayer';
 import { WebtorPlayer } from './WebtorPlayer';
-import { EpisodeRatingsTableModal } from './EpisodeRatingsTableModal';
+import { checkSeedrStatusDirect, addSeedrStreamDirect } from '../lib/seedrService';
 
 interface DetailModalProps {
   item: MediaItem;
@@ -482,9 +482,7 @@ export function DetailModal({
       }
     }));
     try {
-      const response = await fetch(`/api/seedr/status?infoHash=${infoHash}&title=${encodeURIComponent(title)}`);
-      if (!response.ok) throw new Error("Failed response");
-      const data = await response.json();
+      const data = await checkSeedrStatusDirect(infoHash, title);
       setSeedrStatusMap(prev => ({
         ...prev,
         [idx]: {
@@ -523,20 +521,7 @@ export function DetailModal({
       }
     }));
     try {
-      const response = await fetch(`/api/seedr/add`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ magnet: fullMagnetUrl, infoHash, title })
-      });
-      if (!response.ok) {
-        let errMsg = "Failed to add";
-        try {
-          const errData = await response.json();
-          if (errData && errData.error) errMsg = errData.error;
-        } catch (_) {}
-        throw new Error(errMsg);
-      }
-      const data = await response.json();
+      const data = await addSeedrStreamDirect(fullMagnetUrl, infoHash, title);
       setSeedrStatusMap(prev => ({
         ...prev,
         [idx]: {
@@ -549,7 +534,7 @@ export function DetailModal({
           title
         }
       }));
-      triggerToast("Magnet added to Seedr account! Old items cleared.");
+      triggerToast("Magnet added to Seedr account!");
     } catch (error: any) {
       console.error("Error adding Seedr stream:", error);
       setSeedrStatusMap(prev => ({
@@ -594,9 +579,22 @@ export function DetailModal({
     const interval = setInterval(() => {
       downloadingEntries.forEach(async ({ idx, infoHash, title }) => {
         try {
-          const response = await fetch(`/api/seedr/status?infoHash=${infoHash}&title=${encodeURIComponent(title)}`);
-          if (!response.ok) throw new Error("Failed polling");
-          const data = await response.json();
+          const data = await checkSeedrStatusDirect(infoHash, title);
+          setSeedrStatusMap(prev => ({
+            ...prev,
+            [idx]: {
+              status: data.status,
+              loading: false,
+              progress: data.progress,
+              files: data.files,
+              message: data.message,
+              infoHash,
+              title
+            }
+          }));
+        } catch (e) {}
+      });
+    }, 5000);
           
           setSeedrStatusMap(prev => {
             // Confirm the entry still exists and is still in downloading/fetching state
@@ -3284,20 +3282,33 @@ export function DetailModal({
           ) : isPlayingTrailer && trailerKey ? (
             <div className="absolute inset-0 w-full h-full bg-black z-10">
               <iframe
-                src={`https://www.youtube.com/embed/${trailerKey}?autoplay=1&modestbranding=1&rel=0`}
+                src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&enablejsapi=1&playsinline=1&rel=0`}
                 title={`${item.title} Trailer`}
                 className="w-full h-full border-0"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                 allowFullScreen
+                referrerPolicy="strict-origin-when-cross-origin"
               />
-              <button
-                id="btn-close-trailer"
-                onClick={() => setIsPlayingTrailer(false)}
-                className="absolute top-5 right-5 px-3 py-1.5 bg-black/80 hover:bg-zinc-800 text-white border border-white/15 rounded-lg text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer z-20"
-              >
-                <X className="w-3.5 h-3.5" />
-                <span>Close Trailer</span>
-              </button>
+              <div className="absolute top-5 right-5 flex items-center gap-2 z-20">
+                <a
+                  href={`https://www.youtube.com/watch?v=${trailerKey}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-lg cursor-pointer"
+                  title="Open in YouTube App"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Open in YouTube</span>
+                </a>
+                <button
+                  id="btn-close-trailer"
+                  onClick={() => setIsPlayingTrailer(false)}
+                  className="px-3 py-1.5 bg-black/80 hover:bg-zinc-800 text-white border border-white/15 rounded-lg text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Close Trailer</span>
+                </button>
+              </div>
             </div>
           ) : (
             <>
