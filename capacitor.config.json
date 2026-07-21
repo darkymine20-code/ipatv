@@ -1,0 +1,13 @@
+{
+  "appId": "com.tvnew.app",
+  "appName": "TVNew",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}
