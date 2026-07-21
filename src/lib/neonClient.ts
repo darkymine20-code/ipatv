@@ -89,7 +89,7 @@ export async function fetchNeonState(userId: string) {
       backdropPath: row.backdrop_path,
       overview: row.overview,
       releaseDate: row.release_date,
-      genres: row.genres,
+      genres: typeof row.genres === 'string' ? JSON.parse(row.genres) : row.genres,
       rating: row.rating ? parseFloat(row.rating) : undefined,
       runtime: row.runtime,
       seasonsCount: row.seasons_count,
@@ -100,10 +100,10 @@ export async function fetchNeonState(userId: string) {
       completed: row.completed,
       stoppedWatching: row.stopped_watching,
       lastWatchedAt: row.last_watched_at ? new Date(row.last_watched_at).getTime() : undefined,
-      seasons: row.seasons,
+      seasons: typeof row.seasons === 'string' ? JSON.parse(row.seasons) : row.seasons,
       imdbId: row.imdb_id,
-      cast: row.cast_data,
-      directors: row.directors,
+      cast: typeof row.cast_data === 'string' ? JSON.parse(row.cast_data) : row.cast_data,
+      directors: typeof row.directors === 'string' ? JSON.parse(row.directors) : row.directors,
     };
 
     if (row.type === 'show') {
@@ -181,9 +181,14 @@ export async function saveNeonState(userId: string, data: {
     sql`DELETE FROM watched_episodes WHERE user_id = ${userId}`
   ]);
 
-  // Batch insert all media items concurrently
+  // Batch insert all media items with explicit ::jsonb type casting
   const itemInserts = allItems.map(item => {
     const isFav = (data.favorites || []).includes(item.id) || item.isFavorite || false;
+    const genresJson = JSON.stringify(item.genres || []);
+    const seasonsJson = item.seasons ? JSON.stringify(item.seasons) : null;
+    const castJson = item.cast ? JSON.stringify(item.cast) : null;
+    const directorsJson = item.directors ? JSON.stringify(item.directors) : null;
+
     return sql`
       INSERT INTO media_items (
         user_id, media_id, type, title, poster_path, backdrop_path,
@@ -193,10 +198,10 @@ export async function saveNeonState(userId: string, data: {
         seasons, imdb_id, cast_data, directors
       ) VALUES (
         ${userId}, ${item.id}, ${item.type}, ${item.title || 'Untitled'}, ${item.posterPath || null}, ${item.backdropPath || null},
-        ${item.overview || null}, ${item.releaseDate || null}, ${JSON.stringify(item.genres || null)}, ${item.rating?.toString() || null}, ${item.runtime || null},
+        ${item.overview || null}, ${item.releaseDate || null}, ${genresJson}::jsonb, ${item.rating?.toString() || null}, ${item.runtime || null},
         ${item.seasonsCount || null}, ${item.episodesCount || null}, ${item.inWatchlist || false}, ${isFav},
         ${item.userRating || null}, ${item.completed || false}, ${item.stoppedWatching || false}, ${item.lastWatchedAt ? new Date(item.lastWatchedAt).toISOString() : null},
-        ${JSON.stringify(item.seasons || null)}, ${item.imdbId || null}, ${JSON.stringify(item.cast || null)}, ${JSON.stringify(item.directors || null)}
+        ${seasonsJson ? sql`${seasonsJson}::jsonb` : null}, ${item.imdbId || null}, ${castJson ? sql`${castJson}::jsonb` : null}, ${directorsJson ? sql`${directorsJson}::jsonb` : null}
       )
     `;
   });

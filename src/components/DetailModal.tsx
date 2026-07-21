@@ -7,7 +7,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { MediaItem, Season, Episode, MediaType, TMDBReview } from '../types';
 import { X, Star, Heart, Users, Bookmark, Check, ChevronDown, ChevronUp, Clock, Calendar, Film, Tv, Play, Ban, ExternalLink, Settings, Link, Flame, HardDrive, Smartphone, Laptop, Copy, Activity, Info, ChevronLeft, Search, Download, Globe, Wifi, Table, LayoutGrid, TrendingUp, MessageSquare, ThumbsUp, ThumbsDown, EyeOff, AlertTriangle, Cloud, RefreshCw, Loader2 } from 'lucide-react';
-import { fetchShowSeasons, getImageUrl, fetchMediaDetails, fetchMediaVideos, fetchMediaReviews, fetchTraktId, fetchTraktComments, fetchEpisodeImdbId, fetchKurdcinemaSearch, fetchKurdcinemaComments } from '../tmdb';
+import { fetchShowSeasons, getImageUrl, fetchMediaDetails, fetchMediaVideos, fetchMediaReviews, fetchTraktId, fetchTraktComments, fetchEpisodeImdbId, fetchKurdcinemaSearch, fetchKurdcinemaComments, fetchImdbRating, fetchImdbReviews } from '../tmdb';
 import { getPredefinedSeasons, getPredefinedEpisodeRating, getUpcomingEpisodesTimeline } from '../data';
 import { AnimatePresence, motion } from 'motion/react';
 import HlsVideoPlayer from './HlsVideoPlayer';
@@ -233,6 +233,35 @@ export function DetailModal({
 
 
   const [imdbInfo, setImdbInfo] = useState<{rating: number, votes: number} | null>(null);
+
+  useEffect(() => {
+    if (item.imdbId) {
+      fetchImdbRating(item.imdbId).then(info => {
+        if (info && info.rating) {
+          setImdbInfo(info);
+        }
+      });
+    } else if (item.rating) {
+      setImdbInfo({ rating: item.rating, votes: 0 });
+    }
+  }, [item.imdbId, item.rating]);
+
+  useEffect(() => {
+    if (activeReviewTab === 'imdb' && imdbReviews.length === 0 && !loadingImdbReviews) {
+      setLoadingImdbReviews(true);
+      const targetImdbId = item.imdbId;
+      if (targetImdbId) {
+        fetchImdbReviews(targetImdbId).then(revs => {
+          if (revs && revs.length > 0) {
+            setImdbReviews(revs);
+          }
+          setLoadingImdbReviews(false);
+        });
+      } else {
+        setLoadingImdbReviews(false);
+      }
+    }
+  }, [activeReviewTab, item.imdbId, imdbReviews.length, loadingImdbReviews]);
 
   const [reviewsSortOrder, setReviewsSortOrder] = useState<'reactions' | 'newest'>('reactions');
   const [userSelectedReactions, setUserSelectedReactions] = useState<Record<string, string>>(() => {
