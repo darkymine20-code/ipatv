@@ -747,36 +747,131 @@ export async function fetchKurdcinemaComments(url: string, type: 'movie' | 'seri
 }
 
 export async function fetchImdbRating(imdbId: string): Promise<{ rating: number | null; votes: number }> {
+  if (!imdbId || typeof imdbId !== 'string') {
+    return { rating: null, votes: 0 };
+  }
+
+  // 1. Try real IMDb GraphQL endpoint
   try {
-    const res = await fetch(`/api/imdb-rating?imdbId=${encodeURIComponent(imdbId)}`);
+    const payload = {
+      query: `query GetTitleRating($id: ID!) {
+        title(id: $id) {
+          ratingsSummary {
+            aggregateRating
+            voteCount
+          }
+        }
+      }`,
+      operationName: "GetTitleRating",
+      variables: { id: imdbId }
+    };
+
+    const res = await fetch('https://caching.graphql.imdb.com/', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/graphql+json, application/json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(payload)
+    });
+
     if (res.ok) {
-      return await res.json();
+      const data = await res.json();
+      const summary = data?.data?.title?.ratingsSummary;
+      if (summary && summary.aggregateRating) {
+        return {
+          rating: Math.round(summary.aggregateRating * 10) / 10,
+          votes: summary.voteCount || 0
+        };
+      }
     }
   } catch (err) {}
 
+  // 2. Try OMDb API fallback for real IMDb rating & vote count
   try {
-    const data = await tmdbFetch(`/find/${imdbId}`, { external_source: 'imdb_id' });
-    const item = data.movie_results?.[0] || data.tv_results?.[0];
-    if (item) {
-      return {
-        rating: item.vote_average ? Math.round(item.vote_average * 10) / 10 : null,
-        votes: item.vote_count || 0,
-      };
+    const omdbRes = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=trilogy`);
+    if (omdbRes.ok) {
+      const omdbData = await omdbRes.json();
+      if (omdbData && omdbData.imdbRating && omdbData.imdbRating !== 'N/A') {
+        const rating = parseFloat(omdbData.imdbRating);
+        const votes = omdbData.imdbVotes ? parseInt(omdbData.imdbVotes.replace(/,/g, ''), 10) : 0;
+        return { rating: isNaN(rating) ? null : rating, votes: isNaN(votes) ? 0 : votes };
+      }
     }
-  } catch (e) {}
+  } catch (err) {}
 
   return { rating: null, votes: 0 };
 }
 
 export async function fetchImdbReviews(imdbId: string): Promise<any[]> {
+  if (!imdbId || typeof imdbId !== 'string') return [];
+
+  // 1. Try real IMDb GraphQL reviews query
   try {
-    const res = await fetch(`/api/imdb-reviews?imdbId=${encodeURIComponent(imdbId)}`);
+    const payload = {
+      query: `query TitleReviews($const: ID!) {
+        title(id: $const) {
+          reviews(first: 15) {
+            edges {
+              node {
+                id
+                author {
+                  nickName
+                }
+                authorRating
+                submissionDate
+                summary {
+                  originalText
+                }
+                text {
+                  originalText
+                }
+                interestingVotes {
+                  up
+                  down
+                }
+              }
+            }
+          }
+        }
+      }`,
+      operationName: "TitleReviews",
+      variables: { const: imdbId }
+    };
+
+    const res = await fetch('https://caching.graphql.imdb.com/', {
+      method: 'POST',
+      headers: {
+        'accept': 'application/graphql+json, application/json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(payload)
+    });
+
     if (res.ok) {
       const data = await res.json();
-      return data.reviews || [];
+      const edges = data?.data?.title?.reviews?.edges;
+      if (edges && Array.isArray(edges) && edges.length > 0) {
+        return edges.map((e: any) => {
+          const node = e.node || {};
+          return {
+            id: node.id || Math.random().toString(),
+            author: node.author?.nickName || 'IMDb Reviewer',
+            authorDetails: {
+              username: node.author?.nickName || 'IMDb User',
+              rating: node.authorRating || null,
+              avatarPath: null,
+            },
+            content: node.text?.originalText || node.summary?.originalText || '',
+            createdAt: node.submissionDate || new Date().toISOString(),
+            likes: node.interestingVotes?.up || 0,
+          };
+        });
+      }
     }
   } catch (err) {}
 
+  // 2. Fallback to TMDB reviews
   try {
     const data = await tmdbFetch(`/find/${imdbId}`, { external_source: 'imdb_id' });
     const item = data.movie_results?.[0] || data.tv_results?.[0];

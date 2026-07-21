@@ -27,7 +27,7 @@ export async function ensureTablesExist() {
           backdrop_path TEXT,
           overview TEXT,
           release_date TEXT,
-          genres JSONB,
+          genres TEXT,
           rating TEXT,
           runtime INTEGER,
           seasons_count INTEGER,
@@ -38,10 +38,10 @@ export async function ensureTablesExist() {
           completed BOOLEAN DEFAULT FALSE,
           stopped_watching BOOLEAN DEFAULT FALSE,
           last_watched_at TIMESTAMP,
-          seasons JSONB,
+          seasons TEXT,
           imdb_id TEXT,
-          cast_data JSONB,
-          directors JSONB
+          cast_data TEXT,
+          directors TEXT
         );
       `,
       sql`
@@ -55,6 +55,16 @@ export async function ensureTablesExist() {
       `
     ]);
 
+    // Ensure columns exist and accept text data for existing databases
+    try {
+      await Promise.all([
+        sql`ALTER TABLE media_items ALTER COLUMN genres TYPE TEXT USING genres::text;`,
+        sql`ALTER TABLE media_items ALTER COLUMN seasons TYPE TEXT USING seasons::text;`,
+        sql`ALTER TABLE media_items ALTER COLUMN cast_data TYPE TEXT USING cast_data::text;`,
+        sql`ALTER TABLE media_items ALTER COLUMN directors TYPE TEXT USING directors::text;`
+      ]);
+    } catch (e) {}
+
     isTablesInitialized = true;
   } catch (err) {
     console.warn('[NeonClient] Table setup note:', err);
@@ -62,15 +72,12 @@ export async function ensureTablesExist() {
 }
 
 export async function fetchNeonState(userId: string) {
-  // Ensure tables exist and register user_profile ID immediately
   await ensureTablesExist();
   
-  // Register user profile ID in Neon immediately
   try {
     await sql`INSERT INTO user_profiles (id) VALUES (${userId}) ON CONFLICT DO NOTHING;`;
   } catch (e) {}
 
-  // Fetch media items and watched episodes concurrently for speed
   const [items, watchedRows] = await Promise.all([
     sql`SELECT * FROM media_items WHERE user_id = ${userId}`,
     sql`SELECT * FROM watched_episodes WHERE user_id = ${userId}`
@@ -81,6 +88,16 @@ export async function fetchNeonState(userId: string) {
   const favorites: number[] = [];
 
   (items || []).forEach((row: any) => {
+    let parsedGenres: any = row.genres;
+    let parsedSeasons: any = row.seasons;
+    let parsedCast: any = row.cast_data;
+    let parsedDirectors: any = row.directors;
+
+    try { if (typeof parsedGenres === 'string') parsedGenres = JSON.parse(parsedGenres); } catch (e) {}
+    try { if (typeof parsedSeasons === 'string') parsedSeasons = JSON.parse(parsedSeasons); } catch (e) {}
+    try { if (typeof parsedCast === 'string') parsedCast = JSON.parse(parsedCast); } catch (e) {}
+    try { if (typeof parsedDirectors === 'string') parsedDirectors = JSON.parse(parsedDirectors); } catch (e) {}
+
     const item: any = {
       id: row.media_id,
       type: row.type,
@@ -89,7 +106,7 @@ export async function fetchNeonState(userId: string) {
       backdropPath: row.backdrop_path,
       overview: row.overview,
       releaseDate: row.release_date,
-      genres: typeof row.genres === 'string' ? JSON.parse(row.genres) : row.genres,
+      genres: parsedGenres,
       rating: row.rating ? parseFloat(row.rating) : undefined,
       runtime: row.runtime,
       seasonsCount: row.seasons_count,
@@ -100,10 +117,10 @@ export async function fetchNeonState(userId: string) {
       completed: row.completed,
       stoppedWatching: row.stopped_watching,
       lastWatchedAt: row.last_watched_at ? new Date(row.last_watched_at).getTime() : undefined,
-      seasons: typeof row.seasons === 'string' ? JSON.parse(row.seasons) : row.seasons,
+      seasons: parsedSeasons,
       imdbId: row.imdb_id,
-      cast: typeof row.cast_data === 'string' ? JSON.parse(row.cast_data) : row.cast_data,
-      directors: typeof row.directors === 'string' ? JSON.parse(row.directors) : row.directors,
+      cast: parsedCast,
+      directors: parsedDirectors,
     };
 
     if (row.type === 'show') {
@@ -143,7 +160,6 @@ export async function saveNeonState(userId: string, data: {
 }, isExplicitReset = false) {
   await ensureTablesExist();
 
-  // Always register user profile ID in Neon database
   try {
     await sql`INSERT INTO user_profiles (id) VALUES (${userId}) ON CONFLICT DO NOTHING;`;
   } catch (e) {}
@@ -161,7 +177,6 @@ export async function saveNeonState(userId: string, data: {
     }
   });
 
-  // Strict wipe protection: NEVER delete existing database entries if incoming payload is empty unless explicit reset
   if (allItems.length === 0 && totalWatchedCount === 0) {
     if (!isExplicitReset) {
       console.warn('[NeonClient] Blocked clearing database for empty state payload.');
@@ -175,19 +190,19 @@ export async function saveNeonState(userId: string, data: {
     }
   }
 
-  // Delete old records for this user before saving updated state
+  // Clear existing items for this user before insert
   await Promise.all([
     sql`DELETE FROM media_items WHERE user_id = ${userId}`,
     sql`DELETE FROM watched_episodes WHERE user_id = ${userId}`
   ]);
 
-  // Batch insert all media items with explicit ::jsonb type casting
+  // Insert all media items concurrently
   const itemInserts = allItems.map(item => {
     const isFav = (data.favorites || []).includes(item.id) || item.isFavorite || false;
-    const genresJson = JSON.stringify(item.genres || []);
-    const seasonsJson = item.seasons ? JSON.stringify(item.seasons) : null;
-    const castJson = item.cast ? JSON.stringify(item.cast) : null;
-    const directorsJson = item.directors ? JSON.stringify(item.directors) : null;
+    const genresStr = JSON.stringify(item.genres || []);
+    const seasonsStr = item.seasons ? JSON.stringify(item.seasons) : null;
+    const castStr = item.cast ? JSON.stringify(item.cast) : null;
+    const directorsStr = item.directors ? JSON.stringify(item.directors) : null;
 
     return sql`
       INSERT INTO media_items (
@@ -198,15 +213,14 @@ export async function saveNeonState(userId: string, data: {
         seasons, imdb_id, cast_data, directors
       ) VALUES (
         ${userId}, ${item.id}, ${item.type}, ${item.title || 'Untitled'}, ${item.posterPath || null}, ${item.backdropPath || null},
-        ${item.overview || null}, ${item.releaseDate || null}, ${genresJson}::jsonb, ${item.rating?.toString() || null}, ${item.runtime || null},
+        ${item.overview || null}, ${item.releaseDate || null}, ${genresStr}, ${item.rating?.toString() || null}, ${item.runtime || null},
         ${item.seasonsCount || null}, ${item.episodesCount || null}, ${item.inWatchlist || false}, ${isFav},
         ${item.userRating || null}, ${item.completed || false}, ${item.stoppedWatching || false}, ${item.lastWatchedAt ? new Date(item.lastWatchedAt).toISOString() : null},
-        ${seasonsJson ? sql`${seasonsJson}::jsonb` : null}, ${item.imdbId || null}, ${castJson ? sql`${castJson}::jsonb` : null}, ${directorsJson ? sql`${directorsJson}::jsonb` : null}
+        ${seasonsStr}, ${item.imdbId || null}, ${castStr}, ${directorsStr}
       )
     `;
   });
 
-  // Batch insert all watched episodes concurrently
   const watchedInserts: any[] = [];
   for (const showIdStr of Object.keys(watched)) {
     const showId = Number(showIdStr);
@@ -224,6 +238,5 @@ export async function saveNeonState(userId: string, data: {
     }
   }
 
-  // Execute all inserts concurrently in parallel
   await Promise.all([...itemInserts, ...watchedInserts]);
 }
