@@ -62,9 +62,16 @@ export async function ensureTablesExist() {
 }
 
 export async function fetchNeonState(userId: string) {
-  // Run table setup & queries in parallel for ultra-fast load
-  const [, items, watchedRows] = await Promise.all([
-    ensureTablesExist(),
+  // Ensure tables exist and register user_profile ID immediately
+  await ensureTablesExist();
+  
+  // Register user profile ID in Neon immediately
+  try {
+    await sql`INSERT INTO user_profiles (id) VALUES (${userId}) ON CONFLICT DO NOTHING;`;
+  } catch (e) {}
+
+  // Fetch media items and watched episodes concurrently for speed
+  const [items, watchedRows] = await Promise.all([
     sql`SELECT * FROM media_items WHERE user_id = ${userId}`,
     sql`SELECT * FROM watched_episodes WHERE user_id = ${userId}`
   ]);
@@ -134,6 +141,13 @@ export async function saveNeonState(userId: string, data: {
   watchedEpisodes: Record<number, Record<string, boolean>>;
   favorites: number[];
 }, isExplicitReset = false) {
+  await ensureTablesExist();
+
+  // Always register user profile ID in Neon database
+  try {
+    await sql`INSERT INTO user_profiles (id) VALUES (${userId}) ON CONFLICT DO NOTHING;`;
+  } catch (e) {}
+
   const allItems = [
     ...(data.shows || []).map(s => ({ ...s, type: 'show' })),
     ...(data.movies || []).map(m => ({ ...m, type: 'movie' })),
@@ -147,26 +161,27 @@ export async function saveNeonState(userId: string, data: {
     }
   });
 
-  // Safety check against wiping database with empty payload
-  if (allItems.length === 0 && totalWatchedCount === 0 && !isExplicitReset) {
-    const existing = await sql`SELECT id FROM media_items WHERE user_id = ${userId} LIMIT 1`;
-    if (existing && existing.length > 0) {
-      console.warn('[NeonClient] Prevented wiping database with empty incoming payload!');
+  // Strict wipe protection: NEVER delete existing database entries if incoming payload is empty unless explicit reset
+  if (allItems.length === 0 && totalWatchedCount === 0) {
+    if (!isExplicitReset) {
+      console.warn('[NeonClient] Blocked clearing database for empty state payload.');
+      return;
+    } else {
+      await Promise.all([
+        sql`DELETE FROM media_items WHERE user_id = ${userId}`,
+        sql`DELETE FROM watched_episodes WHERE user_id = ${userId}`
+      ]);
       return;
     }
   }
 
-  // Delete old user state
+  // Delete old records for this user before saving updated state
   await Promise.all([
     sql`DELETE FROM media_items WHERE user_id = ${userId}`,
     sql`DELETE FROM watched_episodes WHERE user_id = ${userId}`
   ]);
 
-  if (allItems.length === 0 && totalWatchedCount === 0) {
-    return;
-  }
-
-  // Batch insert all media items in parallel
+  // Batch insert all media items concurrently
   const itemInserts = allItems.map(item => {
     const isFav = (data.favorites || []).includes(item.id) || item.isFavorite || false;
     return sql`
@@ -186,7 +201,7 @@ export async function saveNeonState(userId: string, data: {
     `;
   });
 
-  // Batch insert all watched episodes in parallel
+  // Batch insert all watched episodes concurrently
   const watchedInserts: any[] = [];
   for (const showIdStr of Object.keys(watched)) {
     const showId = Number(showIdStr);
@@ -204,6 +219,6 @@ export async function saveNeonState(userId: string, data: {
     }
   }
 
-  // Execute all inserts in parallel for maximum speed (~100ms)
+  // Execute all inserts concurrently in parallel
   await Promise.all([...itemInserts, ...watchedInserts]);
 }

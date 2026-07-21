@@ -130,13 +130,18 @@ export function useAppState(isSiteLocked = false) {
             watchedEpisodes: Object.keys(loadedWatched).length
           };
 
-          setRawState({
+          const loadedState: SavedState = {
             shows: Array.from(new Map(loadedShows.map((s: any) => [s.id, s])).values()),
             movies: Array.from(new Map(loadedMovies.map((m: any) => [m.id, m])).values()),
             watchedEpisodes: loadedWatched,
             favorites: data.favorites || [],
             updatedAt: Date.now()
-          });
+          };
+
+          setRawState(loadedState);
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(loadedState));
+          } catch (e) {}
 
           setDbStatus({ usePostgres: true, hasDbUrl: true, dbError: null });
           loadFailedRef.current = false;
@@ -146,52 +151,58 @@ export function useAppState(isSiteLocked = false) {
           setIsLoaded(true);
           return;
         } catch (neonErr) {
-          console.warn('[NeonClient] Direct fetch failed, trying /api/state fallback:', neonErr);
+          console.warn('[NeonClient] Direct fetch failed:', neonErr);
         }
 
         // Fallback to /api/state if running behind express server
-        const res = await fetch(`/api/state?t=${Date.now()}`, {
-          headers: {
-            'Authorization': 'Bearer ' + deviceId
-          }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          const loadedShows = data.shows || [];
-          const loadedMovies = data.movies || [];
-          const loadedWatched = data.watchedEpisodes || {};
-
-          initialLoadedCountRef.current = {
-            shows: loadedShows.length,
-            movies: loadedMovies.length,
-            watchedEpisodes: Object.keys(loadedWatched).length
-          };
-
-          setRawState({
-            shows: Array.from(new Map(loadedShows.map((s: any) => [s.id, s])).values()),
-            movies: Array.from(new Map(loadedMovies.map((m: any) => [m.id, m])).values()),
-            watchedEpisodes: loadedWatched,
-            favorites: data.favorites || [],
-            updatedAt: Date.now()
+        try {
+          const res = await fetch(`/api/state?t=${Date.now()}`, {
+            headers: {
+              'Authorization': 'Bearer ' + deviceId
+            }
           });
-          if (data.dbStatus) {
-            setDbStatus(data.dbStatus);
+          if (res.ok) {
+            const data = await res.json();
+            const loadedShows = data.shows || [];
+            const loadedMovies = data.movies || [];
+            const loadedWatched = data.watchedEpisodes || {};
+
+            initialLoadedCountRef.current = {
+              shows: loadedShows.length,
+              movies: loadedMovies.length,
+              watchedEpisodes: Object.keys(loadedWatched).length
+            };
+
+            setRawState({
+              shows: Array.from(new Map(loadedShows.map((s: any) => [s.id, s])).values()),
+              movies: Array.from(new Map(loadedMovies.map((m: any) => [m.id, m])).values()),
+              watchedEpisodes: loadedWatched,
+              favorites: data.favorites || [],
+              updatedAt: Date.now()
+            });
+            if (data.dbStatus) {
+              setDbStatus(data.dbStatus);
+            }
+            loadFailedRef.current = false;
+            isLoadedRef.current = true;
+            hasChangesRef.current = false;
+            setLoadFailed(false);
+            setIsLoaded(true);
+            return;
           }
-          loadFailedRef.current = false;
-          isLoadedRef.current = true;
-          hasChangesRef.current = false;
-          setLoadFailed(false);
-          setIsLoaded(true);
-        } else {
-          // Fallback to local storage
-          const stored = localStorage.getItem(STORAGE_KEY);
-          if (stored) {
+        } catch (apiErr) {}
+
+        // Fallback to local storage for offline reading, but set loadFailedRef to true so saveState doesn't overwrite DB
+        const stored = localStorage.getItem(STORAGE_KEY);
+        if (stored) {
+          try {
             setRawState(JSON.parse(stored));
-          }
-          isLoadedRef.current = true;
-          setLoadFailed(false);
-          setIsLoaded(true);
+          } catch (err) {}
         }
+        loadFailedRef.current = true;
+        isLoadedRef.current = true;
+        setLoadFailed(true);
+        setIsLoaded(true);
       } catch (e) {
         console.warn('Failed to load state from cloud:', e);
         const stored = localStorage.getItem(STORAGE_KEY);
@@ -200,8 +211,9 @@ export function useAppState(isSiteLocked = false) {
             setRawState(JSON.parse(stored));
           } catch (err) {}
         }
+        loadFailedRef.current = true;
         isLoadedRef.current = true;
-        setLoadFailed(false);
+        setLoadFailed(true);
         setIsLoaded(true);
       }
     };
@@ -233,18 +245,6 @@ export function useAppState(isSiteLocked = false) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(pruned));
     } catch (e) {}
 
-    const currentShowsCount = pruned.shows.length;
-    const currentMoviesCount = pruned.movies.length;
-    const currentWatchedCount = Object.keys(pruned.watchedEpisodes || {}).length;
-    
-    if (!isResettingRef.current && (
-      (initialLoadedCountRef.current.shows > 0 && currentShowsCount === 0) ||
-      (initialLoadedCountRef.current.watchedEpisodes > 0 && currentWatchedCount === 0)
-    )) {
-      console.warn('[saveState] Blocked saving empty/wiped state to avoid overwriting existing cloud data!');
-      return;
-    }
-
     const isReset = isResettingRef.current;
     if (isReset) {
       isResettingRef.current = false;
@@ -257,7 +257,7 @@ export function useAppState(isSiteLocked = false) {
 
       // Save directly to Neon over HTTPS
       try {
-        await saveNeonState(deviceId, pruned);
+        await saveNeonState(deviceId, pruned, isReset);
         return;
       } catch (neonSaveErr) {
         console.warn('[NeonClient] Direct save failed, trying /api/state fallback:', neonSaveErr);
