@@ -12,6 +12,7 @@ import { getPredefinedSeasons, getPredefinedEpisodeRating, getUpcomingEpisodesTi
 import { AnimatePresence, motion } from 'motion/react';
 import HlsVideoPlayer from './HlsVideoPlayer';
 import { WebtorPlayer } from './WebtorPlayer';
+import { EpisodeRatingsTableModal } from './EpisodeRatingsTableModal';
 import { checkSeedrStatusDirect, addSeedrStreamDirect } from '../lib/seedrService';
 
 interface DetailModalProps {
@@ -595,28 +596,6 @@ export function DetailModal({
         } catch (e) {}
       });
     }, 5000);
-          
-          setSeedrStatusMap(prev => {
-            // Confirm the entry still exists and is still in downloading/fetching state
-            if (!prev[idx] || prev[idx].status !== 'downloading') return prev;
-            
-            return {
-              ...prev,
-              [idx]: {
-                ...prev[idx],
-                status: data.status,
-                progress: data.progress,
-                files: data.files,
-                message: data.message,
-                loading: false
-              }
-            };
-          });
-        } catch (error) {
-          console.error("Error auto-polling Seedr status:", error);
-        }
-      });
-    }, 4000); // Check status every 4 seconds
 
     return () => clearInterval(interval);
   }, [downloadingHashesKey]);

@@ -131,8 +131,8 @@ export function useAppState(isSiteLocked = false) {
           };
 
           const loadedState: SavedState = {
-            shows: Array.from(new Map(loadedShows.map((s: any) => [s.id, s])).values()),
-            movies: Array.from(new Map(loadedMovies.map((m: any) => [m.id, m])).values()),
+            shows: Array.from(new Map(loadedShows.map((s: any) => [s.id, s])).values()) as MediaItem[],
+            movies: Array.from(new Map(loadedMovies.map((m: any) => [m.id, m])).values()) as MediaItem[],
             watchedEpisodes: loadedWatched,
             favorites: data.favorites || [],
             updatedAt: Date.now()
