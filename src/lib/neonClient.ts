@@ -27,7 +27,7 @@ export async function ensureTablesExist() {
           backdrop_path TEXT,
           overview TEXT,
           release_date TEXT,
-          genres TEXT,
+          genres JSONB,
           rating TEXT,
           runtime INTEGER,
           seasons_count INTEGER,
@@ -38,10 +38,10 @@ export async function ensureTablesExist() {
           completed BOOLEAN DEFAULT FALSE,
           stopped_watching BOOLEAN DEFAULT FALSE,
           last_watched_at TIMESTAMP,
-          seasons TEXT,
+          seasons JSONB,
           imdb_id TEXT,
-          cast_data TEXT,
-          directors TEXT
+          "cast" JSONB,
+          directors JSONB
         );
       `,
       sql`
@@ -54,16 +54,6 @@ export async function ensureTablesExist() {
         );
       `
     ]);
-
-    // Ensure columns exist and accept text data for existing databases
-    try {
-      await Promise.all([
-        sql`ALTER TABLE media_items ALTER COLUMN genres TYPE TEXT USING genres::text;`,
-        sql`ALTER TABLE media_items ALTER COLUMN seasons TYPE TEXT USING seasons::text;`,
-        sql`ALTER TABLE media_items ALTER COLUMN cast_data TYPE TEXT USING cast_data::text;`,
-        sql`ALTER TABLE media_items ALTER COLUMN directors TYPE TEXT USING directors::text;`
-      ]);
-    } catch (e) {}
 
     isTablesInitialized = true;
   } catch (err) {
@@ -90,7 +80,7 @@ export async function fetchNeonState(userId: string) {
   (items || []).forEach((row: any) => {
     let parsedGenres: any = row.genres;
     let parsedSeasons: any = row.seasons;
-    let parsedCast: any = row.cast_data;
+    let parsedCast: any = row.cast || row.cast_data;
     let parsedDirectors: any = row.directors;
 
     try { if (typeof parsedGenres === 'string') parsedGenres = JSON.parse(parsedGenres); } catch (e) {}
@@ -196,13 +186,9 @@ export async function saveNeonState(userId: string, data: {
     sql`DELETE FROM watched_episodes WHERE user_id = ${userId}`
   ]);
 
-  // Insert all media items concurrently
+  // Insert all media items concurrently using correct column names
   const itemInserts = allItems.map(item => {
     const isFav = (data.favorites || []).includes(item.id) || item.isFavorite || false;
-    const genresStr = JSON.stringify(item.genres || []);
-    const seasonsStr = item.seasons ? JSON.stringify(item.seasons) : null;
-    const castStr = item.cast ? JSON.stringify(item.cast) : null;
-    const directorsStr = item.directors ? JSON.stringify(item.directors) : null;
 
     return sql`
       INSERT INTO media_items (
@@ -210,13 +196,13 @@ export async function saveNeonState(userId: string, data: {
         overview, release_date, genres, rating, runtime,
         seasons_count, episodes_count, in_watchlist, is_favorite,
         user_rating, completed, stopped_watching, last_watched_at,
-        seasons, imdb_id, cast_data, directors
+        seasons, imdb_id, "cast", directors
       ) VALUES (
         ${userId}, ${item.id}, ${item.type}, ${item.title || 'Untitled'}, ${item.posterPath || null}, ${item.backdropPath || null},
-        ${item.overview || null}, ${item.releaseDate || null}, ${genresStr}, ${item.rating?.toString() || null}, ${item.runtime || null},
+        ${item.overview || null}, ${item.releaseDate || null}, ${item.genres || []}, ${item.rating?.toString() || null}, ${item.runtime || null},
         ${item.seasonsCount || null}, ${item.episodesCount || null}, ${item.inWatchlist || false}, ${isFav},
         ${item.userRating || null}, ${item.completed || false}, ${item.stoppedWatching || false}, ${item.lastWatchedAt ? new Date(item.lastWatchedAt).toISOString() : null},
-        ${seasonsStr}, ${item.imdbId || null}, ${castStr}, ${directorsStr}
+        ${item.seasons || null}, ${item.imdbId || null}, ${item.cast || null}, ${item.directors || null}
       )
     `;
   });

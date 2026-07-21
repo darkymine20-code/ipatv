@@ -201,12 +201,22 @@ export function DetailModal({
   useEffect(() => {
     if (activeReviewTab === 'kurdcinema' && !kurdcinemaComments && !isSearchingKurdcinema && !isFetchingKurdcinemaComments && !kurdcinemaSelectedUrl && kurdcinemaSearchResults.length === 0) {
       setIsSearchingKurdcinema(true);
-      fetchKurdcinemaSearch(item.title || '', item.type === 'show' ? 'series' : 'movie').then(res => {
+      const searchTitle = item.title || '';
+      
+      fetchKurdcinemaSearch(searchTitle, item.type === 'show' ? 'series' : 'movie').then(async res => {
+        let finalResults = res || [];
+        if (finalResults.length === 0 && searchTitle.includes(' ')) {
+          // Try searching with just the first main word
+          const firstWord = searchTitle.split(' ')[0];
+          if (firstWord.length > 2) {
+            finalResults = await fetchKurdcinemaSearch(firstWord, 'all');
+          }
+        }
 
-        if (res && res.length > 0) {
-          let bestMatch = res[0];
-          const queryTitle = (item.title || '').toLowerCase().trim();
-          for (const r of res) {
+        if (finalResults && finalResults.length > 0) {
+          let bestMatch = finalResults[0];
+          const queryTitle = searchTitle.toLowerCase().trim();
+          for (const r of finalResults) {
             let rTitle = (r.title || '').toLowerCase();
             rTitle = rTitle.replace(/\(\d{4}\)/g, '').replace(/[‎‏‪-‮]/g, '').trim();
             if (rTitle === queryTitle) {
@@ -214,7 +224,7 @@ export function DetailModal({
               break;
             }
           }
-          setKurdcinemaSearchResults(res);
+          setKurdcinemaSearchResults(finalResults);
           setKurdcinemaSelectedUrl(bestMatch.url || bestMatch.id);
 
           setIsSearchingKurdcinema(false);
